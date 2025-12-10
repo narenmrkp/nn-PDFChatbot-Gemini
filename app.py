@@ -1,10 +1,12 @@
 """
-NN's PDF Q&A Chatbot — Updated
-- Sidebar: Groq API Key (masked), Gemini API Key (masked), Groq model dropdown
-- Embeddings: Gemini (gemini-embedding-001) — key validated with a quick test embed
-- LLM: Groq (SDK if available), HTTP fallback if required
-- Vectorstore: Chroma local
-- All UI text (including errors) forced to white for readable contrast on violet background
+NN's PDF Q&A Chatbot — UI fixes for masked keys and sidebar color
+- Sidebar fields are masked (Streamlit's type="password")
+- Additional visible masked indicator (fixed '********') shown when a key exists
+- Sidebar background set to vibrant golden-orange gradient (CSS)
+- All app text forced to white for readability on violet background
+- Embeddings: Gemini (gemini-embedding-001 hard-coded)
+- LLM: Groq (SDK preferred, otherwise HTTP fallback)
+- Vectorstore: Chroma local (langchain_community wrapper)
 """
 
 import os
@@ -14,11 +16,9 @@ from typing import List, Optional
 
 import streamlit as st
 from PyPDF2 import PdfReader
-
-# LangChain 0.3+ splitter
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-# Chroma wrapper (langchain community)
+# Chroma wrapper (langchain_community)
 try:
     from langchain_community.vectorstores import Chroma
 except Exception:
@@ -42,10 +42,12 @@ except Exception:
 
 import requests
 
-# UI config
+# Streamlit page config
 st.set_page_config(page_title="NN's PDF Q&A Chatbot", layout="wide")
 
-# ---------- CSS: violet background + white text everywhere + golden-orange sidebar ----------
+# ----------------------
+# CSS: violet background, white text, golden-orange sidebar
+# ----------------------
 st.markdown(
     """
     <style>
@@ -55,38 +57,38 @@ st.markdown(
         color: white !important;
     }
 
-    /* Sidebar vibrant golden orange */
-    .stSidebar .sidebar-content {
+    /* Sidebar styling: vibrant golden-orange gradient */
+    /* Two selectors to increase compatibility across Streamlit versions */
+    .stSidebar .sidebar-content, .css-1d391kg .stSidebar {
         background: linear-gradient(180deg, #ffb703 0%, #fb8500 100%) !important;
         color: white !important;
         padding: 16px !important;
         border-radius: 8px !important;
     }
 
-    /* Force text color white in many common elements (covers messages, markdown, results) */
+    /* Force text color white in input, markdown, and outputs */
     .stTextInput, .stTextArea, .stMarkdown, .stButton, .stExpander, .stMetric {
         color: white !important;
     }
-
-    /* Inputs and textareas readable */
     input, textarea {
         color: white !important;
         background-color: rgba(255,255,255,0.06) !important;
     }
 
-    /* Force Streamlit alert/exception look to white text for readability */
+    /* Force alert/exception/error/warning to white text */
     .stAlert, .stException, .stError, .stWarning {
         color: white !important;
         background: rgba(0,0,0,0.18) !important;
     }
 
-    /* Make outputs (markdown) white */
-    .streamlit-expanderHeader, .stMarkdown, .stText {
+    /* Ensure outputs and captions remain white */
+    .streamlit-expanderHeader, .stMarkdown, .stText, .stCaption {
         color: white !important;
     }
 
-    /* Safety: ensure small fonts for captions remain visible */
-    .stCaption {
+    /* Buttons */
+    .stButton>button {
+        background-color: rgba(255,255,255,0.08) !important;
         color: white !important;
     }
     </style>
@@ -94,15 +96,18 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# Title and description
 st.title("NN's PDF Q&A Chatbot")
-st.write("Upload a PDF, embed with Gemini embeddings, and query using Groq. Enter keys in the sidebar.")
+st.write("Upload a PDF, embed with Gemini embeddings, and query using Groq. Enter keys in the sidebar (masked).")
 
-# ---------- Sidebar (three controls only) ----------
-# We use direct sidebar inputs (no form) so inputs are instantly in session_state and masked.
-groq_api_key = st.sidebar.text_input("Groq API Key", type="password", key="groq_api_key")
-gemini_api_key = st.sidebar.text_input("Gemini (Google) API Key", type="password", key="gemini_api_key")
+# ----------------------
+# Sidebar: three controls only (masked inputs + model dropdown)
+# ----------------------
+# Use direct sidebar inputs (type="password" ensures characters typed are masked)
+groq_api_key_input = st.sidebar.text_input("Groq API Key", type="password", key="groq_api_key_input")
+gemini_api_key_input = st.sidebar.text_input("Gemini (Google) API Key", type="password", key="gemini_api_key_input")
 
-# Groq model dropdown with the models you requested (adjust to exact model names from your account)
+# Groq model dropdown (example models you requested)
 groq_model = st.sidebar.selectbox(
     "Groq model",
     options=[
@@ -111,57 +116,61 @@ groq_model = st.sidebar.selectbox(
         "chat.groq"
     ],
     index=0,
-    key="groq_model"
+    key="groq_model_select"
 )
 
-# Fixed constant: embedding model (hidden from UI)
-EMBEDDING_MODEL = "gemini-embedding-001"
+# Show masked confirmation right below each input (fixed stars so the real key isn't revealed)
+if groq_api_key_input:
+    st.sidebar.markdown("**Groq key:** `********`")
+else:
+    st.sidebar.markdown("**Groq key:** _not set_")
 
-# Fixed top_k
+if gemini_api_key_input:
+    st.sidebar.markdown("**Gemini key:** `********`")
+else:
+    st.sidebar.markdown("**Gemini key:** _not set_")
+
+# constants
+EMBEDDING_MODEL = "gemini-embedding-001"
 TOP_K = 4
 
-# Warnings if optional dependencies are missing
+# Warnings for missing packages
 if not GOOGLE_GENAI_AVAILABLE:
-    st.sidebar.error("Missing langchain-google-genai package — Gemini embeddings will not work until installed.")
+    st.sidebar.error("Missing 'langchain-google-genai' — Gemini embeddings unavailable until installed.")
 if Chroma is None:
-    st.sidebar.error("Missing Chroma wrapper (langchain_community). Install required packages.")
+    st.sidebar.error("Missing Chroma wrapper (langchain_community). Install required package.")
 if not GROQ_SDK_AVAILABLE:
-    st.sidebar.info("Groq SDK not installed; the app will fallback to HTTP requests for Groq calls.")
+    st.sidebar.info("Groq SDK not installed; app will attempt HTTP fallback for Groq calls.")
 
-# ---------- Helpers ----------
-def show_white_error(msg: str):
-    """Show an error message styled to remain white on violet background."""
-    st.markdown(f'<div style="color: white; background: rgba(0,0,0,0.18); padding:10px; border-radius:6px;">'
-                f'<strong>Error:</strong> {msg}</div>', unsafe_allow_html=True)
+# Helper functions to display white-styled messages
+def white_error(msg: str):
+    st.markdown(f'<div style="color:white; background: rgba(0,0,0,0.18); padding:10px; border-radius:6px;"><strong>Error:</strong> {msg}</div>', unsafe_allow_html=True)
 
-def show_white_info(msg: str):
-    st.markdown(f'<div style="color: white; padding:8px;">{msg}</div>', unsafe_allow_html=True)
+def white_info(msg: str):
+    st.markdown(f'<div style="color:white; padding:8px;">{msg}</div>', unsafe_allow_html=True)
 
-def test_gemini_key(embeddings, sample_text="hello"):
-    """
-    Run a tiny embedding request to validate the provided Gemini API key.
-    Raises Exception on failure.
-    """
-    # Many embeddings wrappers expose embed_documents or embed_query — try common ones.
-    if hasattr(embeddings, "embed_documents"):
-        return embeddings.embed_documents([sample_text])
-    if hasattr(embeddings, "embed_queries"):
-        return embeddings.embed_queries([sample_text])
-    if hasattr(embeddings, "embed_query"):
-        return embeddings.embed_query(sample_text)
+# small embedding test function
+def test_embedding_wrapper(emb, sample="validation test"):
+    if hasattr(emb, "embed_documents"):
+        return emb.embed_documents([sample])
+    if hasattr(emb, "embed_queries"):
+        return emb.embed_queries([sample])
+    if hasattr(emb, "embed_query"):
+        return emb.embed_query(sample)
     raise RuntimeError("Embeddings wrapper has no known embed method.")
 
-# ---------- File uploader and pipeline ----------
+# ----------------------
+# File uploader and processing
+# ----------------------
 uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
-
 vectorstore = None
-texts = []
+texts: List[str] = []
 
 if uploaded_file:
     status = st.empty()
     status.info("Uploading PDF...")
 
-    # Save uploaded file temporarily
+    # Save to tempfile
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         tmp.write(uploaded_file.read())
         tmp_path = tmp.name
@@ -175,66 +184,60 @@ if uploaded_file:
             if txt:
                 raw_text += txt + "\n"
     except Exception as e:
-        show_white_error(f"Failed to read PDF: {e}")
+        white_error(f"Failed to read PDF: {e}")
         st.stop()
 
     if not raw_text.strip():
-        show_white_error("No extractable text found in the uploaded PDF.")
+        white_error("No extractable text found in the uploaded PDF.")
         st.stop()
 
     status.info("Splitting text into chunks...")
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
-        chunk_overlap=200,
-        separators=["\n\n", "\n", " ", ""],
-    )
+    splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=200, separators=["\n\n", "\n", " ", ""])
     texts = splitter.split_text(raw_text)
     status.info(f"{len(texts)} chunks created — preparing embeddings...")
 
-    # Validate Gemini key presence
-    if not gemini_api_key:
-        show_white_error("Gemini (Google) API key is required. Paste it in the sidebar (it will appear masked).")
+    # Validate Gemini key input presence
+    if not gemini_api_key_input:
+        white_error("Gemini (Google) API key is required. Paste it in the sidebar (it will appear masked).")
         st.stop()
 
-    # Validate embedding package presence
+    # Validate embedding package
     if not GOOGLE_GENAI_AVAILABLE or GoogleGenerativeAIEmbeddings is None:
-        show_white_error("Gemini embeddings package 'langchain-google-genai' is not available in this environment.")
+        white_error("Gemini embeddings package 'langchain-google-genai' is not installed in this environment.")
         st.stop()
 
-    # Initialize embeddings and do a small test embed to validate the API key.
+    # Initialize embeddings with the provided key (this wrapper expects a google_api_key argument)
     try:
-        embeddings = GoogleGenerativeAIEmbeddings(google_api_key=gemini_api_key, model=EMBEDDING_MODEL)
+        embeddings = GoogleGenerativeAIEmbeddings(google_api_key=gemini_api_key_input, model=EMBEDDING_MODEL)
     except Exception as e:
-        show_white_error(f"Failed to initialize Gemini embeddings wrapper: {e}")
-        st.stop()
-
-    # Test the key with a tiny call and handle errors gracefully (user saw earlier INVALID_ARGUMENT).
-    try:
-        # small test to surface invalid API key right away
-        _ = test_gemini_key(embeddings, sample_text="validation test")
-    except Exception as e:
-        # parse some common error shapes to present actionable advice
-        err_text = str(e)
-        if "API key not valid" in err_text or "API_KEY_INVALID" in err_text or "401" in err_text:
-            show_white_error(
-                "Gemini API key validation failed: the API key appears invalid. "
-                "Please confirm you pasted the correct key and that the key has access to the Generative Language API (Vertex/Gemini)."
-            )
+        # show user-friendly guidance
+        err = str(e)
+        if "API key not valid" in err or "API_KEY_INVALID" in err or "401" in err:
+            white_error("Gemini API key validation failed: the API key looks invalid. Verify the key and that Generative Language API is enabled.")
         else:
-            show_white_error(f"Gemini embedding test failed: {err_text}")
+            white_error(f"Failed to initialize Gemini embeddings: {err}")
+        st.stop()
+
+    # Test the key via a small embedding call to surface invalid-key errors early
+    try:
+        _ = test_embedding_wrapper(embeddings)
+    except Exception as e:
+        err = str(e)
+        if "API key not valid" in err or "API_KEY_INVALID" in err or "401" in err:
+            white_error("Gemini API key validation failed during test embed: the key appears invalid or lacks permission. Check the Google Cloud Console.")
+        else:
+            white_error(f"Gemini embedding test failed: {err}")
         st.stop()
 
     # Build Chroma vectorstore
     if Chroma is None:
-        show_white_error("Chroma vectorstore wrapper is not available in this environment. Install required package.")
+        white_error("Chroma vectorstore wrapper is not available. Install 'langchain_community' or the appropriate package.")
         st.stop()
 
     try:
-        # Many Chroma wrappers accept parameter name 'embedding' or 'embeddings'
-        # We'll attempt a widely used signature.
         vectorstore = Chroma.from_texts(texts=texts, embedding=embeddings)
     except Exception as e:
-        show_white_error(f"Failed to create vectorstore: {e}")
+        white_error(f"Failed to create vectorstore: {e}")
         st.stop()
 
     status.success("Document embedded successfully and ready to query.")
@@ -243,12 +246,11 @@ if uploaded_file:
     question = st.text_input("Enter your question:")
 
     if st.button("Get answer") and question.strip():
-        # Validate Groq key
-        if not groq_api_key:
-            show_white_error("Groq API key is required. Enter it in the sidebar (masked).")
+        if not groq_api_key_input:
+            white_error("Groq API key is required. Enter it in the sidebar (masked).")
             st.stop()
 
-        # Retrieve top-k docs. Try both APIs (similarity_search_with_score preferred)
+        # Retrieve top documents
         try:
             if hasattr(vectorstore, "similarity_search_with_score"):
                 hits = vectorstore.similarity_search_with_score(question, k=TOP_K)
@@ -258,12 +260,11 @@ if uploaded_file:
                 docs = vectorstore.similarity_search(question, k=TOP_K)
                 scores = None
             else:
-                raise RuntimeError("Vectorstore retrieval method not found.")
+                raise RuntimeError("Vectorstore retrieval API not found.")
         except Exception as e:
-            show_white_error(f"Document retrieval failed: {e}")
+            white_error(f"Retrieval failed: {e}")
             st.stop()
 
-        # Build context from retrieved docs (each snippet truncated)
         def safe_snip(t: str, n: int = 2000) -> str:
             return t.replace("\n", " ")[:n]
 
@@ -271,24 +272,22 @@ if uploaded_file:
         context_text = "\n\n---\n\n".join(context_parts)
 
         prompt = (
-            "You are a helpful assistant that answers questions using the provided document context. "
+            "You are a helpful assistant that answers questions using the provided PDF context. "
             "If the answer cannot be found in the context, reply: \"I don't know based on the provided document.\""
             f"\n\nContext:\n{context_text}\n\nQuestion: {question}\n\nAnswer:"
         )
 
-        show_white_info("Querying Groq LLM now...")
+        white_info("Querying Groq LLM for the answer...")
 
-        # Attempt Groq SDK first
         answer_text: Optional[str] = None
         groq_error: Optional[str] = None
 
+        # Try Groq SDK first
         if GROQ_SDK_AVAILABLE and Groq is not None:
             try:
-                client = Groq(api_key=groq_api_key)
-                # Try chat-like method
+                client = Groq(api_key=groq_api_key_input)
                 try:
                     resp = client.chat.create(messages=[{"role": "user", "content": prompt}], model=groq_model)
-                    # Many SDK responses are dict-like; try to extract content
                     if isinstance(resp, dict):
                         if resp.get("content"):
                             answer_text = resp["content"]
@@ -305,7 +304,6 @@ if uploaded_file:
                     else:
                         answer_text = str(resp)
                 except Exception:
-                    # Try alternative SDK endpoint shape
                     try:
                         resp2 = client.completions.create(prompt=prompt, model=groq_model)
                         if isinstance(resp2, dict) and "choices" in resp2:
@@ -317,20 +315,20 @@ if uploaded_file:
             except Exception as e:
                 groq_error = f"Groq SDK initialization failed: {e}"
 
-        # If no SDK answer, attempt HTTP fallback
+        # HTTP fallback for Groq
         if not answer_text:
             try:
                 headers = {
-                    "Authorization": f"Bearer {groq_api_key}",
+                    "Authorization": f"Bearer {groq_api_key_input}",
                     "Content-Type": "application/json",
                 }
                 payload = {
                     "model": groq_model,
                     "messages": [{"role": "user", "content": prompt}],
                     "max_tokens": 800,
-                    "temperature": 0.0
+                    "temperature": 0.0,
                 }
-                BASE_URL = "https://api.groq.ai/v1"  # adjust if Groq provides a different base URL
+                BASE_URL = "https://api.groq.ai/v1"
                 endpoint = f"{BASE_URL}/chat/completions"
                 resp = requests.post(endpoint, headers=headers, json=payload, timeout=30)
                 if resp.status_code == 200:
@@ -353,12 +351,12 @@ if uploaded_file:
                 groq_error = f"Groq HTTP fallback exception: {e}"
 
         if not answer_text:
-            show_white_error("Failed to obtain an answer from Groq.")
+            white_error("Failed to obtain an answer from Groq.")
             if groq_error:
                 st.markdown(f'<div style="color:white">Details: {groq_error}</div>', unsafe_allow_html=True)
             st.stop()
 
-        # Present answer and top documents (all text forced white by CSS)
+        # Present answer (white text)
         st.markdown("**ANSWER**")
         st.markdown(f'<div style="color:white; background: rgba(0,0,0,0.12); padding:12px; border-radius:6px;">{answer_text}</div>', unsafe_allow_html=True)
 
@@ -372,12 +370,13 @@ if uploaded_file:
                 snippet = getattr(d, "page_content", str(d))[:700].replace("\n", " ")
                 st.markdown(f'<div style="color:white">[{i}] {snippet}...</div>', unsafe_allow_html=True)
 
-# Footer note
+# Footer
 st.markdown("---")
 st.markdown(
-    '<div style="color:white">Notes: '
-    'If you get "Gemini API key invalid" please verify the key is correct, has access to the Generative Language API '
-    '(Vertex AI/Gemini) and is not restricted by IP/Referrer. For Groq, make sure the model name in the dropdown matches '
-    'your Groq account. If Groq uses a different base URL for your tenant, edit BASE_URL accordingly in the code.</div>',
+    '<div style="color:white">Notes: The input fields are masked using Streamlit\'s password input. '
+    'Because Streamlit does not allow customizing the in-field mask character, this app shows a fixed `********` '
+    'indicator beneath each input when a key is present. If Gemini key returns `API key not valid`, verify the key '
+    'and ensure the Generative Language API is enabled in Google Cloud. If Groq calls fail, confirm the exact model name '
+    'and update BASE_URL if your Groq tenant uses a different endpoint.</div>',
     unsafe_allow_html=True
 )
