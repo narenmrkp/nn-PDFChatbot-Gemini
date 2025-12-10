@@ -1,7 +1,0 @@
-streamlit
-PyPDF2
-langchain
-langchain-google-genai
-groq
-chromadb
-tiktoken
